@@ -9,8 +9,8 @@ logger = pySteve.logger_setup('Notion-2-SXT')
 # load notion key and tableid
 vars = pySteve.envfile_load(envfile)
 notion_api_key = vars['NOTION_API_KEY']
-sxt_schema = vars['SXT_CRM_SCHEMA']
-sxt_biscuit = vars['SXT_CRM_BISCUIT']
+sxt_schema = vars['SXTLABS_SCHEMA']
+sxt_biscuit = vars['SXTLABS_BISCUIT']
 sxt = SpaceAndTime(envfile_filepath=envfile, 
                    user_id=vars['USER_ID'], # TODO: should be picked up from envfile
                    application_name=logger.name, 
