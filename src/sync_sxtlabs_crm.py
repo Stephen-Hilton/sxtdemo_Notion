@@ -1,3 +1,5 @@
+from datetime import datetime
+from dateutil import parser
 from pysteve import pySteve 
 from spaceandtime import SpaceAndTime, SxTExceptions, SXTTable
 
@@ -16,7 +18,7 @@ sxt = SpaceAndTime(envfile_filepath=envfile,
                    application_name=logger.name, 
                    logger=logger)
 
-# get all tables to load
+# get list of all table names from SXT 
 sxt.authenticate()
 success, sxt_tables = sxt.discovery_get_tables(sxt_schema, search_pattern='CRM_%')
 notion_tables = {n:v for n,v in vars.items() if n[:4]=='CRM_'}
@@ -29,7 +31,7 @@ final_kvdata = []
 final_rowdatasets = {}
 final_rowidtitles = []
 
-# get all users of notion, for find/replace later:
+# get all users of notion, for ID-->Title find/replace later:
 notion_users = pySteve.notionapi_get_users(notion_api_key)
 for notion_user in notion_users:
     final_rowidtitles.extend([{'id':n, 'title':v['name']} for n,v in notion_users.items()])
@@ -53,7 +55,7 @@ for table_name, notion_id in notion_tables.items():
     # connect to the SXT Table object and pull data 
     sxttable = SXTTable(f'{sxt_schema}.{table_name}', SpaceAndTime_parent=sxt)
     sxttable.biscuits.append(sxt_biscuit)
-    success, sxt_data = sxttable.select(row_limit=2000)
+    success, sxt_data = sxttable.select(row_limit=2000) # TODO: extend SELECT to allow pagination
     delete_sxt_table = len(sxt_data) > 0
 
     # get Notion data + metadata
@@ -77,15 +79,25 @@ for table_name, notion_id in notion_tables.items():
             if str(colname['db_name']).lower() in sxtcollist: # only add if col is in sxt_table
                 newrow[colname['db_name']] = row[colname['notion_name']]
 
-        # only append row if it's (a) missing from SXT data, or (b) last modify time doesn't match
+        # only append row if it's (a) missing from SXT data, or (b) last modify time is greater in notion
         sxtlastedited = [s['LAST_EDITED_TIME'] for s in sxt_data if s['ID'] == newrow['id']] 
-        if newrow['last_edited_time'] not in sxtlastedited:
-            notion_newdata.append(newrow)
+        if len(sxtlastedited) <= 0: # <-- New Notion Row, add to DB
+            notion_newdata.append(newrow) 
+        else:  # <-- check for updates
+            notion_record_time = parser.parse(newrow['last_edited_time'])
+            sxtdb_record_time =  parser.parse(sxtlastedited[0])
+            if notion_record_time == sxtdb_record_time: # No change, do nothing
+                pass
+            elif notion_record_time > sxtdb_record_time: # Notion record newer, so update DB
+                notion_newdata.append(newrow) 
+            elif sxtdb_record_time > notion_record_time: # TODO:  DB is newer, update Notion
+                pass 
  
     sxt.logger.info(f'---> Rows to Update: {len(notion_newdata)}')
 
     # hold notion_newdata in collection of all tables, so we can replace id/title before insert
-    final_rowdatasets[notion_name] = {'notion_newdata':notion_newdata, 'sxttable':sxttable}
+    final_rowdatasets[notion_name] = {'notion_newdata':notion_newdata, 'notion_alldata':notion_data,
+                                      'sxttable':sxttable, 'sxttable_data':sxt_data}
 
 
 # Loop thru any records we're going to insert, and find/replace ID for Title
@@ -120,6 +132,14 @@ for notion_name, notion_obj in final_rowdatasets.items():
 
         # insert new and changed records                
         sxttable.insert.with_list_of_dicts(list_of_dicts = notion_newdata)
+
+
+# at this point, SXT DB should have all new and changed records from notion
+
+# TODO: write logic in the DB to perform UPDATES and select out those records:
+#   if 1a qualified lead, and have had a meeting, change to 2a discovery initial meeting
+#   if more than N-weeks pass since last meeting or last action update, move to fallout subphase (phase 5 or below)
+# then update changes back to notion UI
 
 
 # TODO: perform final KVData Insert
