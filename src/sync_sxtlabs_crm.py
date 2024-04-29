@@ -9,7 +9,7 @@ envfile = 'private.env' # change to your .env file
 logger = pySteve.logger_setup('Notion-2-SXT')
 
 # load notion key and tableid
-vars = pySteve.envfile_load(envfile)
+vars = pySteve.envfile_load(envfile, docstring_marker_override='EOM')
 notion_api_key = vars['NOTION_API_KEY']
 sxt_schema = vars['SXTLABS_SCHEMA']
 sxt_biscuit = vars['SXTLABS_BISCUIT']
@@ -17,6 +17,12 @@ sxt = SpaceAndTime(envfile_filepath=envfile,
                    user_id=vars['USER_ID'], # TODO: should be picked up from envfile
                    application_name=logger.name, 
                    logger=logger)
+
+# sorted_dict = dict(sorted(my_dict.items()))
+prework_sqls =  dict(sorted({n:v for n,v in vars.items() if str(n).startswith('PRE')  and '_SQL_' in n}.items()))
+midwork_sqls =  dict(sorted({n:v for n,v in vars.items() if str(n).startswith('MID')  and '_SQL_' in n}.items()))
+postwork_sqls = dict(sorted({n:v for n,v in vars.items() if str(n).startswith('POST') and '_SQL_' in n}.items()))
+all_biscuits =  [v for n,v in vars.items() if str(n).endswith('BISCUIT')]
 
 # get list of all table names from SXT 
 sxt.authenticate()
@@ -36,6 +42,11 @@ notion_users = pySteve.notionapi_get_users(notion_api_key)
 for notion_user in notion_users:
     final_rowidtitles.extend([{'id':n, 'title':v['name']} for n,v in notion_users.items()])
 
+
+# process all PRE-work queries:
+for name, sql in prework_sqls.items():
+    sxt.logger.info(f'Running Postwork Query: {name}')
+    success, response = sxt.execute_query(sql, biscuits=all_biscuits)
 
 
 ### iterate thru each table def
@@ -132,6 +143,11 @@ for notion_name, notion_obj in final_rowdatasets.items():
 
         # insert new and changed records                
         sxttable.insert.with_list_of_dicts(list_of_dicts = notion_newdata)
+
+# process all post-work queries:
+for name, sql in postwork_sqls.items():
+    sxt.logger.info(f'Running Postwork Query: {name}')
+    success, response = sxt.execute_query(sql, biscuits=all_biscuits)
 
 
 # at this point, SXT DB should have all new and changed records from notion
