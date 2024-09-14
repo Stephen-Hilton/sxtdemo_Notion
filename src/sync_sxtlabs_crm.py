@@ -77,10 +77,11 @@ for table_name, notion_id in notion_tables.items():
         notion_users = [v for n,v in notion_users.items()] # from dict to list
         notion_users = [{'id':r['id'], 
                          'Person Name':r['name'], 
-                         'Email':r['email'], 
-                         'parent_id':'internal_notion_user', 
-                         '__notion_row_title__':r['name'],
-                         'Account Name':'Space and Time'} for r in notion_users]
+                         'Email':r['email'],
+                         '🚀 Account Name':'15ae53de-c425-483d-a94b-7211485a8e87', 
+                         'last_edited_time':'2020-01-01T00:00:00.000+00:00',
+                         'Tags':'internal_notion_user',
+                         '__notion_row_title__':r['name']} for r in notion_users]
         notion_data.extend(notion_users)
 
         # add Notion_Users data to Notion_KVData (manually)
@@ -93,6 +94,9 @@ for table_name, notion_id in notion_tables.items():
                                       'RowID':user['id'],
                                       'CellValue':val,
                                       'CellCount':1})
+        
+        # delete all users from SXT, as occasion needs 
+        if False: sxt.execute_query(f"""DELETE FROM SXTLABS.CRM_PEOPLE WHERE ID in ( '{"', '".join([r['id'] for r in notion_users])}' )""", biscuits=all_biscuits)
 
 
     # keep a final list of all keyvalue data for ID/title find & replace below

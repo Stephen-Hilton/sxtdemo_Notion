@@ -1,6 +1,6 @@
 # project specific ignores
 sandbox.py
-sync_sxtlabs_telem.py
+sync_sxtlabs_telem*
 sync_sxtlabs_crm_test.py
 crm_send_actions_to_slack.py
 
