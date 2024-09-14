@@ -118,6 +118,7 @@ for table_name, notion_id in notion_tables.items():
         if len(sxtlastedited) <= 0: # <-- New Notion Row, add to DB
             notion_newdata.append(newrow) 
         else:  # <-- check for updates
+            if not sxtlastedited[0]: continue # no last_edited_time in SXT, skip insert
             notion_record_time = parser.parse(newrow['last_edited_time'])
             sxtdb_record_time =  parser.parse(sxtlastedited[0])
             if notion_record_time == sxtdb_record_time: # No change, do nothing
