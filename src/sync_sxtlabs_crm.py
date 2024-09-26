@@ -64,44 +64,74 @@ for table_name, notion_id in notion_tables.items():
     success, sxt_data = sxttable.select(row_limit=10000) # TODO: extend SELECT to allow pagination
     delete_sxt_table = len(sxt_data) > 0
 
+
     # get Notion data + metadata
     notion_name = notion_data = notion_kvdata = notion_columns = None
-    notion_name,  notion_data,  notion_kvdata,  notion_columns = pySteve.notionapi_get_dataset(notion_api_key, notion_id, row_limit=2000)
-    for column in notion_columns: column['db_name'] = column['db_name'].lower()
 
-    # if CRM_PEOPLE, add Notion_Users to the dataset 
-    if table_name == 'CRM_PEOPLE':
+    # special handling for CRM_KEYVALUE
+    if table_name == 'CRM_KEYVALUE':
+        notion_name = 'KeyValue'
+        notion_data = [ {'id': f"{r['Notion_DBName']}--{r['ColumnName']}--{r['RowID']}--{r['CellValue']}"
+                        ,'Notion_DBName':r['Notion_DBName']
+                        ,'ColumnName':r['ColumnName']
+                        ,'ColumnType':r['ColumnType']
+                        ,'RowID':r['RowID']
+                        ,'CellValue':r['CellValue']
+                        ,'CellCount':str(r['CellCount'])
+                        ,'Last_Edited_By':'ETL_Process'
+                        ,'Last_Edited_Time': '2020-01-01T00:00:00.000+00:00'
+                        , } for r in final_kvdata]
+        notion_kvdata = []  
+        notion_columns = [ {'notion_name':'id'              , 'order':0}
+                          ,{'notion_name':'Notion_DBName'   , 'order':1}
+                          ,{'notion_name':'ColumnName'      , 'order':2}
+                          ,{'notion_name':'ColumnType'      , 'order':3}
+                          ,{'notion_name':'RowID'           , 'order':4}
+                          ,{'notion_name':'CellValue'       , 'order':5}
+                          ,{'notion_name':'CellCount'       , 'order':6}
+                          ,{'notion_name':'Last_Edited_By'  , 'order':7}
+                          ,{'notion_name':'Last_Edited_Time', 'order':8}
+                          ]   
+        notion_columns = [{'notion_name':c['notion_name'], 'db_name':c['notion_name'].lower(), 'notion_type':'text', 'db_type':'varchar', 'order':c['order']} for c in notion_columns]
 
-        # get all internal users of notion, and add to CRM_People
-        notion_users = pySteve.notionapi_get_users(notion_api_key)
-        notion_users = [v for n,v in notion_users.items()] # from dict to list
-        notion_users = [{'id':r['id'], 
-                         'Person Name':r['name'], 
-                         'Email':r['email'],
-                         '🚀 Account Name':'15ae53de-c425-483d-a94b-7211485a8e87', 
-                         'last_edited_time':'2020-01-01T00:00:00.000+00:00',
-                         'Tags':'internal_notion_user',
-                         '__notion_row_title__':r['name']} for r in notion_users]
-        notion_data.extend(notion_users)
-
-        # add Notion_Users data to Notion_KVData (manually)
-        for user in notion_users: 
-            for nm,val in user.items():
-                if nm in ('id', '__notion_row_title__'): continue
-                notion_kvdata.append({'Notion_DBName':'People', 
-                                      'ColumnName':nm, 
-                                      'ColumnType':'text', 
-                                      'RowID':user['id'],
-                                      'CellValue':val,
-                                      'CellCount':1})
+    else:  # all other tables:
         
-        # delete all users from SXT, as occasion needs 
-        if False: sxt.execute_query(f"""DELETE FROM SXTLABS.CRM_PEOPLE WHERE ID in ( '{"', '".join([r['id'] for r in notion_users])}' )""", biscuits=all_biscuits)
+        notion_name,  notion_data,  notion_kvdata,  notion_columns = pySteve.notionapi_get_dataset(notion_api_key, notion_id, row_limit=2000)
+        for column in notion_columns: column['db_name'] = column['db_name'].lower()
 
+        # if CRM_PEOPLE, add Notion_Users to the dataset 
+        if table_name == 'CRM_PEOPLE':
 
-    # keep a final list of all keyvalue data for ID/title find & replace below
-    final_kvdata.extend(notion_kvdata) # hold for the end
-    final_rowidtitles.extend([{'id':r['id'], 'title':r['__notion_row_title__']} for r in notion_data])
+            # get all internal users of notion, and add to CRM_People
+            notion_users = pySteve.notionapi_get_users(notion_api_key)
+            notion_users = [v for n,v in notion_users.items()] # from dict to list
+            notion_users = [{'id':r['id'], 
+                            'Person Name':r['name'], 
+                            'Email':r['email'],
+                            '🚀 Account Name':'15ae53de-c425-483d-a94b-7211485a8e87', 
+                            'last_edited_time':'2020-01-01T00:00:00.000+00:00',
+                            'Tags':'internal_notion_user',
+                            '__notion_row_title__':r['name']} for r in notion_users]
+            notion_data.extend(notion_users)
+
+            # add Notion_Users data to Notion_KVData (manually)
+            for user in notion_users: 
+                for nm,val in user.items():
+                    if nm in ('id', '__notion_row_title__'): continue
+                    notion_kvdata.append({'Notion_DBName':'People', 
+                                        'ColumnName':nm, 
+                                        'ColumnType':'text', 
+                                        'RowID':user['id'],
+                                        'CellValue':val,
+                                        'CellCount':1})
+            
+            # delete all users from SXT, as occasion needs 
+            if False: sxt.execute_query(f"""DELETE FROM SXTLABS.CRM_PEOPLE WHERE ID in ( '{"', '".join([r['id'] for r in notion_users])}' )""", biscuits=all_biscuits)
+
+        # keep a final list of all keyvalue data for ID/title find & replace below
+        final_kvdata.extend(notion_kvdata) # hold for the end
+        final_rowidtitles.extend([{'id':r['id'], 'title':r['__notion_row_title__']} for r in notion_data])
+
 
     # in the notion_data, replace the notion_names with the db_names,
     # and remove any that don't exist in the table
@@ -113,7 +143,8 @@ for table_name, notion_id in notion_tables.items():
         for colname in notion_columns:
             if colname['notion_name'] in['parent','id','object'] or \
                colname['notion_name'] not in row.keys()          or \
-               row[colname['notion_name']] in ('', None): continue
+               row[colname['notion_name']] in ('', None): 
+                continue
             if str(colname['db_name']).lower() in sxtcollist: # only add if col is in sxt_table
                 newrow[colname['db_name']] = row[colname['notion_name']]
 
@@ -139,6 +170,7 @@ for table_name, notion_id in notion_tables.items():
                                       'sxttable':sxttable, 'sxttable_data':sxt_data}
 
 
+
 # Loop thru any records we're going to insert, and find/replace ID for Title
 # (must be done after all tables are pulled, to ensure we have all replace ids)
 # this is going to be gross, sorry:
@@ -148,6 +180,7 @@ for notion_name, notion_obj in final_rowdatasets.items():
     sxt.logger.info(f'...{notion_name}')
     for rownum, rowdata in enumerate(notion_newdata):
         for colname, colvalue in rowdata.items():
+            colvalue = str(colvalue)
             if not colvalue or len(colvalue)==0: continue
             if colname in ['id','parent_id']: continue
             newcolvalue = colvalue
