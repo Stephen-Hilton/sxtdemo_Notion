@@ -14,7 +14,7 @@ notion_api_key = vars['NOTION_API_KEY']
 sxt_schema = vars['SXTLABS_SCHEMA']
 sxt_biscuit = vars['SXTLABS_BISCUIT']
 sxt = SpaceAndTime(envfile_filepath=envfile, 
-                   user_id=vars['USER_ID'], # TODO: should be picked up from envfile
+                   user_id=vars['USERID'], # TODO: should be picked up from envfile
                    application_name=logger.name, 
                    logger=logger)
 
@@ -25,8 +25,8 @@ postwork_sqls = dict(sorted({n:v for n,v in vars.items() if str(n).startswith('P
 all_biscuits =  [v for n,v in vars.items() if str(n).endswith('BISCUIT')]
 
 # get list of all table names from SXT 
-sxt.authenticate()
-success, sxt_tables = sxt.discovery_get_tables(sxt_schema, search_pattern='CRM_%')
+success, access_token = sxt.authenticate()
+success, sxt_tables = sxt.discovery_get_tables(sxt_schema, scope=sxt.DISCOVERY_SCOPE.SUBSCRIPTION, search_pattern='CRM_' )
 notion_tables = {n:v for n,v in vars.items() if n[:4]=='CRM_'}
 
 if not success or len(sxt_tables) == 0:
@@ -58,11 +58,27 @@ for table_name, notion_id in notion_tables.items():
     success, sxt_columns = sxt.discovery_get_table_columns(sxt_schema, table_name)
     sxtcollist = [r['column'].lower() for r in sxt_columns]
 
-    # connect to the SXT Table object and pull data 
+    # connect to the SXT Table object and pull ALL data 
     sxttable = SXTTable(f'{sxt_schema}.{table_name}', SpaceAndTime_parent=sxt)
     sxttable.biscuits.append(sxt_biscuit)
-    success, sxt_data = sxttable.select(row_limit=10000) # TODO: extend SELECT to allow pagination
-    delete_sxt_table = len(sxt_data) > 0
+
+    # repetitively paginate thru 10k rows at at a time (sigh)
+    err_cnt = 0
+    sxt_data = []
+    sxt_data_tmp = None
+    while len(sxt_data) == 0 or len(sxt_data_tmp) == 10000:
+        success, sxt_data_tmp = sxttable.select(sql_text=f"select * from {sxttable.table_name} order by ID asc limit 10000 offset {len(sxt_data)}") # TODO: extend SELECT to allow pagination
+        if len(sxt_data_tmp) == 0: break
+        if success: 
+            sxt_data.extend(sxt_data_tmp) 
+            err_cnt = 0
+        else: 
+            err_cnt += 1
+            if err_cnt > 5: break
+
+    # clean up SXT data
+    sxt_data = [{n:None if v=='' else v for n,v in r.items()} for r in sxt_data] # '' to None
+    delete_sxt_table = len(sxt_data) > 0  # set delete flag
 
 
     # get Notion data + metadata
@@ -94,10 +110,23 @@ for table_name, notion_id in notion_tables.items():
                           ]   
         notion_columns = [{'notion_name':c['notion_name'], 'db_name':c['notion_name'].lower(), 'notion_type':'text', 'db_type':'varchar', 'order':c['order']} for c in notion_columns]
 
-    else:  # all other tables:
-        
-        notion_name,  notion_data,  notion_kvdata,  notion_columns = pySteve.notionapi_get_dataset(notion_api_key, notion_id, row_limit=2000)
-        for column in notion_columns: column['db_name'] = column['db_name'].lower()
+    else:  # all other Notion tables:
+
+        notion_errors = 0
+        while True:
+            try:
+                sxt.logger.info(f'NOTION query started: {table_name}')
+                notion_name,  notion_data,  notion_kvdata,  notion_columns = pySteve.notionapi_get_dataset(notion_api_key, notion_id, row_limit=2000)
+                break
+            except Exception as e:
+                sxt.logger.error(f'Error getting data for {table_name}: {e}, retrying...')
+                notion_errors += 1
+                if notion_errors >= 5: raise SxTExceptions.SxTQueryError(f'Error getting data for {table_name}: {e}, ABORTING...')
+
+        # clean up data from Notion
+        sxt.logger.info(f'Notion query finished: {len(notion_data)} Rows Returned')
+        notion_data = [{n:None if v=='' else v for n,v in r.items()} for r in notion_data] # '' to None
+        for column in notion_columns: column['db_name'] = column['db_name'].lower() # lower case db_name
 
         # if CRM_PEOPLE, add Notion_Users to the dataset 
         if table_name == 'CRM_PEOPLE':
@@ -132,18 +161,19 @@ for table_name, notion_id in notion_tables.items():
         final_kvdata.extend(notion_kvdata) # hold for the end
         final_rowidtitles.extend([{'id':r['id'], 'title':r['__notion_row_title__']} for r in notion_data])
 
-
+ 
     # in the notion_data, replace the notion_names with the db_names,
     # and remove any that don't exist in the table
     #   TODO: extend pySteve to remove elements where value == ''
     #   TODO: add filter API by date (much more efficient)
     notion_newdata = [] 
     for row in notion_data:
-        newrow = {'id':row['id']}
+        newrow = {n:None for n in sxtcollist}
+        newrow['id'] = row['id']  
         for colname in notion_columns:
             if colname['notion_name'] in['parent','id','object'] or \
-               colname['notion_name'] not in row.keys()          or \
-               row[colname['notion_name']] in ('', None): 
+               colname['notion_name'] not in row.keys()          :
+               # row[colname['notion_name']] in ('', None): 
                 continue
             if str(colname['db_name']).lower() in sxtcollist: # only add if col is in sxt_table
                 newrow[colname['db_name']] = row[colname['notion_name']]
@@ -180,13 +210,12 @@ for notion_name, notion_obj in final_rowdatasets.items():
     sxt.logger.info(f'...{notion_name}')
     for rownum, rowdata in enumerate(notion_newdata):
         for colname, colvalue in rowdata.items():
-            colvalue = str(colvalue)
-            if not colvalue or len(colvalue)==0: continue
+            if colvalue==None or len(colvalue)==0: continue
             if colname in ['id','parent_id']: continue
-            newcolvalue = colvalue
+            newcolvalue = str(colvalue)
             for idtitle in final_rowidtitles:
-                if idtitle['id'] in colvalue:
-                    newcolvalue = newcolvalue.replace(idtitle['id'],idtitle['title'])
+                if idtitle['id'] in newcolvalue:
+                    newcolvalue = newcolvalue.replace(idtitle['id'], '' if idtitle['title']==None else idtitle['title'])
             final_rowdatasets[notion_name]['notion_newdata'][rownum][colname] = newcolvalue
 
 
@@ -194,8 +223,11 @@ for notion_name, notion_obj in final_rowdatasets.items():
 sxt.logger.info('Performing SXT Inserts')
 for notion_name, notion_obj in final_rowdatasets.items():
     notion_newdata = notion_obj['notion_newdata']
-    sxttable = notion_obj['sxttable']
+    if notion_newdata ==[]: continue
     sxt.logger.info(f'...{notion_name}')
+
+    sxttable = SXTTable(notion_obj['sxttable'].table_name, private_key=notion_obj['sxttable'].private_key, SpaceAndTime_parent=sxt)
+    sxttable.biscuits.append(sxt_biscuit)
 
     if len(notion_newdata) > 0:
         # delete any changed records
@@ -203,13 +235,9 @@ for notion_name, notion_obj in final_rowdatasets.items():
             sxttable.delete(where = f"""ID in ({', '.join([f"'{r['id']}'" for r in notion_newdata])})""")
 
         # insert new and changed records                
-        sxttable.insert.with_list_of_dicts(list_of_dicts = notion_newdata)
+    success, response = sxttable.insert.list_of_dicts_batch(list_of_dicts = notion_newdata, rows_per_batch=1000)
 
-# process all post-work queries:
-for name, sql in postwork_sqls.items():
-    sxt.logger.info(f'Running Postwork Query: {name}')
-    success, response = sxt.execute_query(sql, biscuits=all_biscuits)
-
+    sxt.logger.info(f'...{notion_name} complete')
 
 # at this point, SXT DB should have all new and changed records from notion
 
@@ -218,6 +246,4 @@ for name, sql in postwork_sqls.items():
 #   if more than N-weeks pass since last meeting or last action update, move to fallout subphase (phase 5 or below)
 # then update changes back to notion UI
 
-
-# TODO: perform final KVData Insert
 pass
