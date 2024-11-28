@@ -37,7 +37,6 @@ final_kvdata = []
 final_rowdatasets = {}
 final_rowidtitles = []
 
-
 # process all PRE-work queries:
 for name, sql in prework_sqls.items():
     sxt.logger.info(f'Running Postwork Query: {name}')
@@ -123,10 +122,29 @@ for table_name, notion_id in notion_tables.items():
                 notion_errors += 1
                 if notion_errors >= 5: raise SxTExceptions.SxTQueryError(f'Error getting data for {table_name}: {e}, ABORTING...')
 
-        # clean up data from Notion
+        # clean up data from Notion (sigh) 
+        # # TODO: make this better... perhaps check DB for DATE datatype, rather than column name
         sxt.logger.info(f'Notion query finished: {len(notion_data)} Rows Returned')
-        notion_data = [{n:None if v=='' else v for n,v in r.items()} for r in notion_data] # '' to None
-        for column in notion_columns: column['db_name'] = column['db_name'].lower() # lower case db_name
+        for column in notion_columns: column['db_name'] = column['db_name'].lower() # lower case column_name for db_name
+        for i, row in enumerate(notion_data): 
+            for colnm, colvalue in row.items():
+                if i == 18 and colnm=='Record End Date': 
+                    pass
+                if colvalue==None: continue 
+                if colvalue=='':  
+                    row[colnm] = None  # '' to None
+                    continue
+
+                if type(colvalue) == str: 
+                    row[colnm] = colvalue.replace('\n',' ').replace("'","") # remove newlines and single quotes
+
+                if colnm.lower().endswith('date') and type(colvalue) == str:  # try to format dates
+                    try:
+                        row[colnm] = str(parser.parse(colvalue).strftime('%Y-%m-%d'))
+                    except:
+                        pass # take no action and hope for the best...        
+                    if colvalue == 'None': row[colnm] = None
+        
 
         # if CRM_PEOPLE, add Notion_Users to the dataset 
         if table_name == 'CRM_PEOPLE':
